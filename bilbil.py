@@ -15,8 +15,16 @@ import threading
 import getopt
 from pprint import pprint
 import sys
+
+import subprocess
+import imageio
+from PIL import Image
+import urllib3
+
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # 下载地址的镜像格式部分的可能替换值
-video_mode = [ 'mirrorcos.', 'mirrorkodo.', 'mirrorks3.', 'mirrorbos.', 'mirrorks3u.',  ]
+video_mode = [ 'mirrorcos.', 'mirrorkodo.', 'mirrorks3.', 'mirrorbos.', 'mirrorks3u.','mirrorhw.']
 
 # 主线程
 main_thread = threading.current_thread()
@@ -45,7 +53,7 @@ sess = requests.Session()
 #下载的根目录
 root_dir = '.'          
 
-def download_video(video_url, dir_, video_name, index):
+def download_video(video_url, dir_, video_name, index, ext = '.mp4'):
     size = 0
     '''
         当使用requests的get下载大文件/数据时，建议使用使用stream模式。
@@ -60,7 +68,7 @@ def download_video(video_url, dir_, video_name, index):
     # 链接中是否带mirror字符
     isMirror = len(mirror) > 0   
     chunk_size = 102400 * 4 #每次400KB
-    video_name = os.path.join(dir_, video_name, str(index) + '.flv')
+    video_name = os.path.join(dir_, video_name, str(index) + ext)
     
     for i,mode in enumerate(video_mode):  
         video_url = re.sub('mirror.*?\.', mode, video_url)
@@ -96,14 +104,14 @@ def download_video(video_url, dir_, video_name, index):
             
 
 
-def download_videos(dir_, video_urls, video_name):
+def download_videos(dir_, video_urls, video_name, ext = '.mp4'):
     make_path(os.path.join(dir_, video_name))
     print('正在下载 %s 到 %s 文件夹下' %(video_name, os.path.join(dir_, video_name)))
     
     print("共有%d个片段需要下载" %len(video_urls))
     for i, video_url in enumerate(video_urls):      
         
-        t = threading.Thread(target=download_video, kwargs={'video_url': video_url, 'dir_': dir_, 'video_name': video_name, 'index': i+1})
+        t = threading.Thread(target=download_video, kwargs={'video_url': video_url, 'dir_': dir_, 'video_name': video_name, 'index': i+1, 'ext': ext})
         t.setDaemon(True)
         t.start()
         
@@ -121,14 +129,13 @@ def get_download_urls(arcurl):
     pattern = r'<script>window.__playinfo__=(.*?)</script>?'
     try:
         infos = re.findall(pattern, req.text)[0]
-    except:
+    except e:
         return []
-    # print(infos)
     json_ = json.loads(infos)
-    durl = json_['durl']
+    durl = json_['data']['dash']['video']
     
     #urls = [re.sub('mirror.*?\.', 'mirrorcos.', url['url']) for url in durl]
-    urls = [url['url'] for url in durl]
+    urls = [url['baseUrl'] for url in durl]
     
     return urls
 
@@ -210,6 +217,58 @@ def download_by_user (mid):
         if t is main_thread:
             continue
         t.join()
+
+def get_download_urls_and_title(arcurl):
+    req = sess.get(url=arcurl, verify=False,headers=headers)
+    pattern = r'<script>window.__playinfo__=(.*?)</script>?'
+    pattern2 = r'<title data-vue-meta="true">(.*?)_哔哩哔哩(.*?)干杯~-bilibili</title>?'
+    try:
+        infos = re.findall(pattern, req.text)[0]
+        title = re.findall(pattern2,req.text)[0][0]
+        title = re.sub(r'\s','',title)
+    except :
+        messagebox.showinfo("Message", "url错误")
+        return [],[],''
+    json_ = json.loads(infos)
+    durl = json_['data']['dash']['video']
+    audiourl = json_['data']['dash']['audio']
+    #urls = [re.sub('mirror.*?\.', 'mirrorcos.', url['url']) for url in durl]
+    urls = [url['baseUrl'] for url in durl]
+    audiourls = [url['baseUrl'] for url in audiourl]
+    
+    return urls[0], audiourls[0], title
+
+# 合并音视频
+def video_add_mp3(file_name, mp3_file):
+    """
+     视频添加音频
+    :param file_name: 传入视频文件的路径
+    :param mp3_file: 传入音频文件的路径
+    :return:
+    """
+    outfile_name = file_name.split('1.mp4')[0] + 'merge.mp4'
+    subprocess.call('ffmpeg -i ' + file_name
+                    + ' -i ' + mp3_file + ' -strict -2 -f mp4 '
+                    + outfile_name, shell=True)
+
+def download_by_url(url):
+    url,audiourl, title = get_download_urls_and_title(url)
+    if len(url) == 0 :
+        return
+    dir_ = os.path.join(root_dir, title)
+    make_path(dir_)
+    print('创建文件夹 %s 成功' %dir_)
+    download_videos(dir_, [url], title, '.mp4')
+    download_videos(dir_, [audiourl], title, '.mp3')
+    #合并视频音频
+    video_name = os.path.join(dir_, title, '1.mp4')
+    audio_name = os.path.join(dir_, title, '1.mp3')
+    video_add_mp3(video_name, audio_name)
+
+# s = 'https://www.bilibili.com/video/BV1SW411376F'
+# download_by_url(s)
+
+
 
 
 if __name__ == '__main__':
